@@ -1,0 +1,43 @@
+# Node / Frontend
+node_modules/
+dist/
+.env
+.env.*
+npm-debug.log*
+
+# Java / Backend (Maven)
+target/
+*.class
+.idea/
+*.iml
+.classpath
+.project
+.settings/
+.mvn/wrapper/maven-wrapper.jar
+
+# Python / ML Service
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+venv/
+.venv/
+.pytest_cache/
+.coverage
+
+# Security & Credentials
+*.key
+*.pem
+*credentials*.json
+*service-account*.json
+*key*.json
+*secret*.json
+.env*
+config.json
+session.json
+credentials.json
+client_secret.json
+
+# OS files
+.DS_Store
+Thumbs.db

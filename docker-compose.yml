@@ -1,0 +1,47 @@
+version: '3.8'
+
+services:
+  ml-service:
+    build:
+      context: ./ml-service
+      dockerfile: Dockerfile
+    container_name: ml-service
+    ports:
+      - "8001:8001"
+    environment:
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./ml-service:/app
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: backend-service
+    ports:
+      - "8080:8080"
+    environment:
+      - ML_SERVICE_URL=http://ml-service:8001
+    depends_on:
+      ml-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/resume/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: frontend-service
+    ports:
+      - "5173:80"
+    depends_on:
+      - backend
