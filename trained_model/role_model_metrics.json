@@ -1,0 +1,89 @@
+{
+  "dataset": "role_dataset (2).csv",
+  "raw_samples": 962,
+  "unique_samples": 166,
+  "categories_count": 25,
+  "selected_model": "Calibrated Sigmoid LR (class_weight='balanced')",
+  "calibration_method": "sigmoid",
+  "test_accuracy": 0.88,
+  "test_macro_f1": 0.8485,
+  "test_weighted_f1": 0.8572,
+  "test_log_loss": 0.8942,
+  "cross_validation": {
+    "n_splits": 2,
+    "mean_accuracy": 0.8554,
+    "std_accuracy": 0.0241,
+    "mean_macro_f1": 0.8202,
+    "std_macro_f1": 0.0266,
+    "mean_weighted_f1": 0.8366,
+    "std_weighted_f1": 0.0165
+  },
+  "top_predictions_demo": {
+    "Data Scientist": [
+      {
+        "role": "Data Science",
+        "probability": 0.5279
+      },
+      {
+        "role": "Python Developer",
+        "probability": 0.0513
+      },
+      {
+        "role": "Mechanical Engineer",
+        "probability": 0.0406
+      },
+      {
+        "role": "DevOps Engineer",
+        "probability": 0.0351
+      },
+      {
+        "role": "Arts",
+        "probability": 0.034
+      }
+    ],
+    "Java Developer": [
+      {
+        "role": "Java Developer",
+        "probability": 0.6648
+      },
+      {
+        "role": "DevOps Engineer",
+        "probability": 0.0353
+      },
+      {
+        "role": "Python Developer",
+        "probability": 0.0306
+      },
+      {
+        "role": "Blockchain",
+        "probability": 0.024
+      },
+      {
+        "role": "Automation Testing",
+        "probability": 0.0221
+      }
+    ],
+    "Web Designer": [
+      {
+        "role": "Web Designing",
+        "probability": 0.5573
+      },
+      {
+        "role": "Blockchain",
+        "probability": 0.052
+      },
+      {
+        "role": "DevOps Engineer",
+        "probability": 0.0339
+      },
+      {
+        "role": "Java Developer",
+        "probability": 0.0327
+      },
+      {
+        "role": "DotNet Developer",
+        "probability": 0.0263
+      }
+    ]
+  }
+}
