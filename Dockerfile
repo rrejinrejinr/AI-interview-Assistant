@@ -33,7 +33,7 @@ EXPOSE 8001
 
 # Health check using the runtime port
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD-SHELL curl -f "http://localhost:${PORT:-8001}/api/health" || exit 1
+    CMD curl -f "http://localhost:${PORT:-8001}/api/health" || exit 1
 
 # Start FastAPI on Render's assigned port
 CMD sh -c 'export APP_PORT="${PORT:-8001}"; exec uvicorn app_fastapi:app --host 0.0.0.0 --port "$APP_PORT" --workers 2'
