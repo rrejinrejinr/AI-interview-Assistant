@@ -6,13 +6,22 @@ OLD_MODEL_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "
 OLD_TFIDF_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "trained_model", "tfidf.pkl"))
 
 pipeline = None
-if os.path.exists(PIPELINE_PATH):
-    try:
-        with open(PIPELINE_PATH, "rb") as f:
-            pipeline = pickle.load(f)
-    except Exception as e:
-        print(f"Error loading role prediction pipeline: {e}")
+_pipeline_loaded = False
 
+def get_pipeline():
+    global pipeline, _pipeline_loaded
+
+    if not _pipeline_loaded:
+        _pipeline_loaded = True
+
+        if os.path.exists(PIPELINE_PATH):
+            try:
+                with open(PIPELINE_PATH, "rb") as f:
+                    pipeline = pickle.load(f)
+            except Exception as e:
+                print(f"Error loading role prediction pipeline: {e}")
+
+    return pipeline
 def get_confidence_level(top_prob, num_classes=25):
     uniform_chance = 1.0 / num_classes
     if top_prob >= 3 * uniform_chance or top_prob >= 0.15:
@@ -30,18 +39,20 @@ def predict_role(resume_text: str) -> dict:
             "top_predictions": []
         }
 
-    if pipeline:
+        model_pipeline = get_pipeline()
+
+    if model_pipeline:
         try:
-            role = str(pipeline.predict([resume_text])[0])
+            role = str(model_pipeline.predict([resume_text])[0])
             confidence_level = "None"
             top_predictions = []
-            
-            if hasattr(pipeline, "predict_proba"):
-                probs = pipeline.predict_proba([resume_text])[0]
-                pairs = sorted(zip(pipeline.classes_, probs), key=lambda x: x[1], reverse=True)
-                
+
+            if hasattr(model_pipeline, "predict_proba"):
+                probs = model_pipeline.predict_proba([resume_text])[0]
+                pairs = sorted(zip(model_pipeline.classes_, probs), key=lambda x: x[1], reverse=True)
+
                 top_prob = float(pairs[0][1])
-                confidence_level = get_confidence_level(top_prob, len(pipeline.classes_))
+                confidence_level = get_confidence_level(top_prob, len(model_pipeline.classes_))
                 
                 top_predictions = [
                     {"role": str(cp[0]), "probability": round(float(cp[1]), 4)}
