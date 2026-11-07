@@ -1,8 +1,6 @@
 import os
 import re
 from typing import List, Dict, Tuple, Optional
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
 
 from models.skill_extractor import extract_skills
 
@@ -138,6 +136,8 @@ def calculate_semantic_similarity(resume_text: str, comparison_text: str) -> flo
         return 0.0
 
     try:
+        from sklearn.feature_extraction.text import TfidfVectorizer
+        from sklearn.metrics.pairwise import cosine_similarity
         vectorizer = TfidfVectorizer(stop_words='english', max_features=5000)
         tfidf_matrix = vectorizer.fit_transform([resume_text, comparison_text])
         cosine_sim = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:2])[0][0]

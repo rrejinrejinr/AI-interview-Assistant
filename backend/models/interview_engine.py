@@ -14,8 +14,6 @@ import logging
 from typing import List, Dict, Optional, Tuple
 
 import numpy as np
-from sentence_transformers import SentenceTransformer
-from sklearn.metrics.pairwise import cosine_similarity
 
 from models.question_bank import (
     ROLE_QUESTION_BANK,
@@ -35,14 +33,15 @@ KEYWORD_WEIGHT = float(os.getenv("INTERVIEW_KEYWORD_WEIGHT", "0.35"))
 # 
 # Sentence-Transformer Model Loading
 # 
-_model: Optional[SentenceTransformer] = None
+_model = None
 MODEL_STATUS = "not_loaded"
 MODEL_ERROR: Optional[str] = None
 
-def get_model() -> Optional[SentenceTransformer]:
+def get_model():
     global _model, MODEL_STATUS, MODEL_ERROR
     if _model is None:
         try:
+            from sentence_transformers import SentenceTransformer
             _model = SentenceTransformer("all-MiniLM-L6-v2")
             MODEL_STATUS = "loaded"
             MODEL_ERROR = None
@@ -53,19 +52,13 @@ def get_model() -> Optional[SentenceTransformer]:
             logger.error(f"Failed to load sentence-transformers model: {e}")
             _model = None
     return _model
-
-# Initial load
-get_model()
-
 def get_model_status() -> Dict:
-    model = get_model()
     return {
         "status": MODEL_STATUS,
         "model": "all-MiniLM-L6-v2",
         "error": MODEL_ERROR,
-        "available": model is not None,
+        "available": _model is not None,
     }
-
 
 # 
 # Question Generation
@@ -328,6 +321,7 @@ def _semantic_similarity(answer: str, ideal_answer: str) -> float:
             "Ensure 'all-MiniLM-L6-v2' is cached or the internet is available."
         )
     embeddings = model.encode([answer, ideal_answer])
+    from sklearn.metrics.pairwise import cosine_similarity
     sim = float(cosine_similarity([embeddings[0]], [embeddings[1]])[0][0])
     # Clamp to [0, 1]
     sim = max(0.0, min(1.0, sim))
