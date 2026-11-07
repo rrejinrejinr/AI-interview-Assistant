@@ -19,5 +19,7 @@ python-dotenv==1.0.1
 
 requests>=2.32.3,<3
 
-
 reportlab>=4.2.0,<5
+
+# Email delivery via Resend API
+resend>=2.52.0

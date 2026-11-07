@@ -13,6 +13,7 @@ from app_fastapi import app
 
 client = TestClient(app)
 
+
 @pytest.fixture
 def auth_header():
     db = SessionLocal()
@@ -31,44 +32,93 @@ def auth_header():
     db.close()
     return {"Authorization": f"Bearer {token}"}
 
+
 def test_support_ticket_creation_and_reply_to_email():
-    """Verify support ticket email composition, recipient, and Reply-To header."""
-    with patch("smtplib.SMTP") as mock_smtp, \
-         patch("auth_utils.SMTP_USERNAME", "test_smtp_user@gmail.com"), \
-         patch("auth_utils.SMTP_PASSWORD", "mock_app_password_16ch"):
+    """
+    Verify support ticket email composition, recipient, and Reply-To.
 
-        mock_server = mock_smtp.return_value
+    The test mocks auth_utils._send_via_resend (the Resend primary path) so it
+    succeeds without a live API key, then inspects the arguments passed to it.
+    """
+    ticket_payload = {
+        "ticket_id": "TICK-TEST-999",
+        "name": "John Doe",
+        "email": "johndoe@example.com",
+        "category": "ATS Analysis",
+        "subject": "ATS score not calculating",
+        "description": "The ATS score button is great, but I need assistance with keyword matching.",
+        "created_at": "2026-11-04 12:00:00 UTC",
+    }
 
-        # Test the email dispatcher directly with ticket_data dict
-        ticket_payload = {
-            "ticket_id": "TICK-TEST-999",
-            "name": "John Doe",
-            "email": "johndoe@example.com",
-            "category": "ATS Analysis",
-            "subject": "ATS score not calculating",
-            "description": "The ATS score button is great, but I need assistance with keyword matching.",
-            "created_at": "2026-11-04 12:00:00 UTC"
-        }
+    # Patch Resend as configured and intercept _send_via_resend
+    with patch("auth_utils.RESEND_API_KEY", "re_test_key_mock"), \
+         patch("auth_utils.RESEND_FROM_EMAIL", "noreply@test.example.com"), \
+         patch("auth_utils._send_via_resend", return_value=(True, "Email sent successfully via Resend.")) as mock_resend:
 
         sent, msg_info = send_support_ticket_email(ticket_payload)
 
-        assert sent is True
-        assert "delivered" in msg_info.lower()
-        assert mock_server.send_message.called
+        assert sent is True, f"Expected sent=True, got: {msg_info}"
+        assert "delivered" in msg_info.lower(), f"Unexpected status message: {msg_info}"
+        assert mock_resend.called, "_send_via_resend was not called"
+
+        call_kwargs = mock_resend.call_args[1]  # keyword args
+
+        # Recipient
+        assert call_kwargs["to_email"] == "ainterviewassistant@gmail.com"
+
+        # Reply-To
+        assert call_kwargs["reply_to"] == "johndoe@example.com"
+
+        # Subject includes ticket ID and complaint marker
+        assert "TICK-TEST-999" in call_kwargs["subject"]
+        assert "New Support Complaint" in call_kwargs["subject"]
+
+        # Body contains all key fields
+        body = call_kwargs["text_body"]
+        assert "John Doe" in body
+        assert "johndoe@example.com" in body
+        assert "ATS Analysis" in body
+        assert "ATS score not calculating" in body
+        assert "The ATS score button is great" in body
+
+
+def test_support_ticket_smtp_fallback():
+    """
+    When Resend is NOT configured, verify the SMTP fallback path is used
+    and the email message contains the correct recipient and Reply-To header.
+    """
+    ticket_payload = {
+        "ticket_id": "TICK-SMTP-001",
+        "name": "Jane Doe",
+        "email": "janedoe@example.com",
+        "category": "Login Issue",
+        "subject": "Cannot log in",
+        "description": "Password reset is not working.",
+        "created_at": "2026-11-05 09:00:00 UTC",
+    }
+
+    with patch("auth_utils.RESEND_API_KEY", ""), \
+         patch("auth_utils.RESEND_FROM_EMAIL", ""), \
+         patch("auth_utils.SMTP_USERNAME", "test_smtp@gmail.com"), \
+         patch("auth_utils.SMTP_PASSWORD", "mock_app_password_16ch"), \
+         patch("smtplib.SMTP") as mock_smtp:
+
+        mock_server = mock_smtp.return_value
+
+        sent, msg_info = send_support_ticket_email(ticket_payload)
+
+        assert sent is True, f"Expected sent=True, got: {msg_info}"
+        assert mock_server.send_message.called, "smtplib.SMTP.send_message was not called"
+
         sent_msg = mock_server.send_message.call_args[0][0]
         assert sent_msg["To"] == "ainterviewassistant@gmail.com"
-        assert sent_msg["Reply-To"] == "johndoe@example.com"
-        # Email subject format: "New Support Complaint – TICK-XXXX"
-        assert "TICK-TEST-999" in sent_msg["Subject"]
-        assert "New Support Complaint" in sent_msg["Subject"]
+        assert sent_msg["Reply-To"] == "janedoe@example.com"
+        assert "TICK-SMTP-001" in sent_msg["Subject"]
 
-        # Verify body contains complaint subject and details
         payload = sent_msg.get_payload()
-        assert "John Doe" in payload
-        assert "johndoe@example.com" in payload
-        assert "ATS Analysis" in payload
-        assert "ATS score not calculating" in payload  # complaint subject is in body
-        assert "The ATS score button is great" in payload
+        assert "Jane Doe" in payload
+        assert "Cannot log in" in payload
+
 
 def test_support_ticket_api_endpoint(auth_header):
     """Verify /api/support/ticket endpoint persists ticket in DB and triggers notification."""
@@ -78,7 +128,7 @@ def test_support_ticket_api_endpoint(auth_header):
             "email": "janeuser@example.com",
             "category": "Resume Upload",
             "subject": "PDF formatting query",
-            "description": "Please check if two-column PDF resumes are supported."
+            "description": "Please check if two-column PDF resumes are supported.",
         }
         res = client.post("/api/support/ticket", json=payload, headers=auth_header)
         assert res.status_code == 200

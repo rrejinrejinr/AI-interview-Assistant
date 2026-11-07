@@ -13,6 +13,7 @@ if root_env.exists():
     load_dotenv(root_env)
 load_dotenv()
 
+import base64
 import random
 import smtplib
 import ssl
@@ -35,7 +36,15 @@ OTP_EXPIRE_MINUTES = 5          # 5-minute expiry
 MAX_OTP_ATTEMPTS = 3            # Max 3 verification attempts
 OTP_COOLDOWN_SECONDS = 60       # 60s cooldown between resends
 
-# Email SMTP Config
+# ---------------------------------------------------------------------------
+# Resend API Configuration (primary delivery path)
+# ---------------------------------------------------------------------------
+RESEND_API_KEY = os.getenv("RESEND_API_KEY", "").strip()
+RESEND_FROM_EMAIL = os.getenv("RESEND_FROM_EMAIL", "").strip()
+
+# ---------------------------------------------------------------------------
+# Legacy Email / SMTP Configuration (fallback when Resend is not configured)
+# ---------------------------------------------------------------------------
 SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp.gmail.com").strip()
 SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
 SMTP_USERNAME = os.getenv("SMTP_USERNAME", "").strip()
@@ -43,18 +52,110 @@ SMTP_USERNAME = os.getenv("SMTP_USERNAME", "").strip()
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "").strip().replace(" ", "").strip("\"'")
 SENDER_EMAIL = os.getenv("SENDER_EMAIL", "").strip() or SMTP_USERNAME or "noreply@ai-assistant.local"
 
+SUPPORT_RECEIVER_EMAIL = os.getenv("SUPPORT_RECEIVER_EMAIL", "ainterviewassistant@gmail.com").strip() or "ainterviewassistant@gmail.com"
 
-def get_smtp_status() -> dict:
-    """Safe diagnostic status function that never exposes secrets or passwords."""
+
+# ---------------------------------------------------------------------------
+# Resend helper — lazy import so the app still loads if resend is absent
+# ---------------------------------------------------------------------------
+
+def _resend_configured() -> bool:
+    """Return True when RESEND_API_KEY and RESEND_FROM_EMAIL are both set."""
+    return bool(RESEND_API_KEY and RESEND_FROM_EMAIL)
+
+
+def _send_via_resend(
+    to_email: str,
+    subject: str,
+    text_body: str,
+    reply_to: Optional[str] = None,
+    attachments: Optional[list] = None,
+) -> Tuple[bool, str]:
+    """
+    Deliver a plain-text email through the Resend API.
+
+    Args:
+        to_email:    Recipient address.
+        subject:     Email subject line.
+        text_body:   Plain-text body content.
+        reply_to:    Optional Reply-To address.
+        attachments: Optional list of Resend Attachment dicts
+                     (keys: 'content' (List[int]|str), 'filename', 'content_type').
+
+    Returns:
+        (success, status_message)
+    """
+    try:
+        import resend as _resend_sdk
+    except ImportError:
+        logger.error(
+            "resend package is not installed. Run: pip install resend  "
+            "or add resend>=2.52.0 to backend/requirements.txt"
+        )
+        return False, "resend package is not installed on the server."
+
+    _resend_sdk.api_key = RESEND_API_KEY
+
+    params: dict = {
+        "from": RESEND_FROM_EMAIL,
+        "to": to_email,
+        "subject": subject,
+        "text": text_body,
+    }
+    if reply_to:
+        params["reply_to"] = reply_to
+    if attachments:
+        params["attachments"] = attachments
+
+    try:
+        response = _resend_sdk.Emails.send(params)
+        email_id = getattr(response, "id", None) or (response.get("id") if isinstance(response, dict) else None)
+        logger.info(
+            "Resend delivery succeeded: to=%s subject=%r id=%s",
+            to_email, subject, email_id,
+        )
+        return True, "Email sent successfully via Resend."
+    except Exception as exc:
+        # Log the exception type/message but never the API key or OTP value
+        logger.error(
+            "Resend delivery failed: to=%s subject=%r error_type=%s error=%s",
+            to_email, subject, type(exc).__name__, exc,
+        )
+        return False, f"Resend delivery error: {type(exc).__name__}"
+
+
+# ---------------------------------------------------------------------------
+# Diagnostic helpers
+# ---------------------------------------------------------------------------
+
+def get_email_delivery_status() -> dict:
+    """
+    Safe diagnostic status that never exposes secrets.
+    Reports which delivery backend is active.
+    """
     return {
+        "resend_configured": _resend_configured(),
+        "resend_from_email": RESEND_FROM_EMAIL if RESEND_FROM_EMAIL else None,
         "smtp_configured": bool(SMTP_USERNAME and SMTP_PASSWORD),
         "smtp_server": SMTP_SERVER,
         "smtp_port": SMTP_PORT,
         "smtp_username_configured": bool(SMTP_USERNAME),
         "smtp_password_configured": bool(SMTP_PASSWORD),
-        "sender_email": SENDER_EMAIL
+        "sender_email": SENDER_EMAIL,
+        "active_backend": "resend" if _resend_configured() else ("smtp" if SMTP_USERNAME and SMTP_PASSWORD else "none"),
     }
 
+
+# Keep the old name as an alias so existing imports and the /api/auth/smtp-status
+# endpoint in app_fastapi.py continue to work without modification.
+def get_smtp_status() -> dict:
+    """Backward-compatible alias for get_email_delivery_status()."""
+    return get_email_delivery_status()
+
+
+# ---------------------------------------------------------------------------
+# JWT / password helpers (unchanged)
+# ---------------------------------------------------------------------------
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """Verify plain password against bcrypt hash."""
@@ -103,102 +204,15 @@ def generate_otp() -> str:
     return f"{random.SystemRandom().randint(100000, 999999)}"
 
 
-def send_otp_email(to_email: str, otp: str) -> Tuple[bool, str]:
+# ---------------------------------------------------------------------------
+# SMTP fallback helper (used when Resend is not configured)
+# ---------------------------------------------------------------------------
+
+def _send_via_smtp(msg: EmailMessage) -> Tuple[bool, str]:
     """
-    Send verification OTP email via Gmail/SMTP with STARTTLS on port 587.
-    Returns (success: bool, status_message: str).
+    Attempt SMTP delivery using the configured SMTP_* env vars.
+    Returns (success, status_message).
     """
-    msg = EmailMessage()
-    msg.set_content(
-        f"Hello,\n\n"
-        f"Your verification OTP code for AI Interview Assistant is: {otp}\n\n"
-        f"This code will expire in {OTP_EXPIRE_MINUTES} minutes. If you did not request this, please ignore this email.\n\n"
-        f"Best regards,\nAI Interview Assistant Team"
-    )
-    msg["Subject"] = "AI Interview Assistant - Your Verification OTP"
-    msg["From"] = SENDER_EMAIL
-    msg["To"] = to_email
-
-    if not SMTP_USERNAME or not SMTP_PASSWORD:
-        if APP_ENV == "production":
-            logger.error("SMTP credentials not configured in production. Cannot send OTP.")
-            return False, "SMTP credentials are not configured on the server."
-        # Development / Test mock email fallback
-        print(f"\n{'='*50}\n[DEV MOCK EMAIL SENT]\nTo: {to_email}\nSubject: {msg['Subject']}\nOTP: {otp}\n{'='*50}\n")
-        return True, "Dev mock email sent (SMTP unconfigured)."
-
-    try:
-        server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT, timeout=10.0)
-        server.ehlo()
-        server.starttls()
-        server.ehlo()
-        server.login(SMTP_USERNAME, SMTP_PASSWORD)
-        server.send_message(msg)
-        server.quit()
-        logger.info(f"Verification email successfully sent to {to_email} via Gmail SMTP.")
-        return True, "Verification email sent successfully."
-    except smtplib.SMTPAuthenticationError as e:
-        logger.error(
-            f"Gmail SMTP Authentication Failed: {e}. "
-            f"Please ensure 2-Step Verification is active on the sender account and a 16-character Google App Password (not standard account password) is set in SMTP_PASSWORD."
-        )
-        if APP_ENV == "development":
-            print(f"\n{'='*50}\n[DEV MOCK EMAIL SENT FALLBACK]\nTo: {to_email}\nSubject: {msg['Subject']}\nOTP: {otp}\n{'='*50}\n")
-            return True, "Gmail authentication failed; fell back to development mock output."
-        return False, "Gmail SMTP authentication failed. Please verify the Google App Password on the server."
-    except Exception as e:
-        logger.error(f"Failed to send email to {to_email} via SMTP: {type(e).__name__}: {e}")
-        if APP_ENV == "development":
-            print(f"\n{'='*50}\n[DEV MOCK EMAIL SENT FALLBACK]\nTo: {to_email}\nSubject: {msg['Subject']}\nOTP: {otp}\n{'='*50}\n")
-            return True, f"SMTP delivery failed ({type(e).__name__}); fell back to development mock output."
-        return False, f"Failed to send email via SMTP: {type(e).__name__}"
-
-
-SUPPORT_RECEIVER_EMAIL = os.getenv("SUPPORT_RECEIVER_EMAIL", "ainterviewassistant@gmail.com").strip() or "ainterviewassistant@gmail.com"
-
-
-def send_support_ticket_email(ticket_data: dict) -> Tuple[bool, str]:
-    """
-    Send support complaint notification email to ainterviewassistant@gmail.com.
-    Sets user's email as Reply-To so support team can directly reply.
-    Returns (success: bool, status_message: str).
-    """
-    support_target_email = SUPPORT_RECEIVER_EMAIL or "ainterviewassistant@gmail.com"
-    ticket_id = ticket_data.get("ticket_id", "UNKNOWN")
-    user_name = ticket_data.get("name", "Unknown User")
-    user_email = ticket_data.get("email", "Unknown Email")
-    category = ticket_data.get("category", "General")
-    subject = ticket_data.get("subject", "No Subject")
-    description = ticket_data.get("description", "")
-    created_at = ticket_data.get("created_at", datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC"))
-
-    msg = EmailMessage()
-    msg.set_content(
-        f"AI Interview Assistant — Support Complaint Report\n"
-        f"{'='*60}\n"
-        f"Ticket ID:              {ticket_id}\n"
-        f"Submission Date/Time:   {created_at}\n"
-        f"User Full Name:         {user_name}\n"
-        f"User Account Email:     {user_email}\n"
-        f"Issue Category:         {category}\n"
-        f"Subject:                {subject}\n"
-        f"{'='*60}\n\n"
-        f"Detailed Description of Problem:\n"
-        f"{description}\n\n"
-        f"{'='*60}\n"
-        f"Reply-To: {user_email}\n"
-        f"(Direct replies to this email will be delivered to {user_email})\n"
-    )
-    msg["Subject"] = f"New Support Complaint – {ticket_id}"
-    msg["From"] = SENDER_EMAIL or SMTP_USERNAME or "ainterviewassistant@gmail.com"
-    msg["To"] = support_target_email
-    if user_email and "@" in user_email:
-        msg["Reply-To"] = user_email
-
-    if not SMTP_USERNAME or not SMTP_PASSWORD:
-        logger.warning(f"SMTP credentials not configured on the server. Support ticket {ticket_id} logged to DB, but email dispatch to {support_target_email} was skipped.")
-        return False, "SMTP credentials are not configured on the server. Ticket saved in database, but email notification was not sent."
-
     server = None
     try:
         ssl_context = ssl.create_default_context()
@@ -209,20 +223,23 @@ def send_support_ticket_email(ticket_data: dict) -> Tuple[bool, str]:
             server.ehlo()
             server.starttls(context=ssl_context)
             server.ehlo()
-
         server.login(SMTP_USERNAME, SMTP_PASSWORD)
         server.send_message(msg)
-        logger.info(f"Support complaint email [{ticket_id}] successfully delivered to {support_target_email} with Reply-To={user_email}.")
-        return True, f"Support notification email delivered to {support_target_email}."
-    except smtplib.SMTPAuthenticationError as e:
-        logger.error(f"Gmail SMTP Authentication Failed for user {SMTP_USERNAME}: {e}. Ensure 2-Step Verification is enabled and a 16-character Google App Password is used.")
-        return False, "Your complaint has been recorded. Email notification is temporarily pending (authentication error)."
-    except smtplib.SMTPServerDisconnected as e:
-        logger.error(f"Gmail SMTP Server Disconnected for user {SMTP_USERNAME}: {e}. Connection closed by Gmail server after authentication attempt.")
-        return False, "Your complaint has been recorded. Email notification is temporarily pending."
-    except Exception as e:
-        logger.error(f"Failed to deliver support ticket email: {type(e).__name__}: {e}")
-        return False, "Your complaint has been recorded. Email notification is temporarily pending."
+        logger.info("SMTP delivery succeeded: to=%s subject=%r", msg["To"], msg["Subject"])
+        return True, "Email sent successfully via SMTP."
+    except smtplib.SMTPAuthenticationError as exc:
+        logger.error(
+            "SMTP authentication failed (username=%s): %s. "
+            "Ensure 2-Step Verification is enabled and a 16-character Google App Password is used.",
+            SMTP_USERNAME, exc,
+        )
+        return False, "SMTP authentication failed. Please verify the Google App Password on the server."
+    except smtplib.SMTPServerDisconnected as exc:
+        logger.error("SMTP server disconnected (server=%s): %s", SMTP_SERVER, exc)
+        return False, "SMTP server disconnected unexpectedly."
+    except Exception as exc:
+        logger.error("SMTP delivery failed: %s: %s", type(exc).__name__, exc)
+        return False, f"SMTP delivery error: {type(exc).__name__}"
     finally:
         if server is not None:
             try:
@@ -232,6 +249,152 @@ def send_support_ticket_email(ticket_data: dict) -> Tuple[bool, str]:
                     server.close()
                 except Exception:
                     pass
+
+
+# ---------------------------------------------------------------------------
+# Public email functions
+# ---------------------------------------------------------------------------
+
+def send_otp_email(to_email: str, otp: str) -> Tuple[bool, str]:
+    """
+    Send verification OTP email.
+
+    Delivery priority:
+      1. Resend API (when RESEND_API_KEY + RESEND_FROM_EMAIL are set)
+      2. SMTP (when SMTP_USERNAME + SMTP_PASSWORD are set)
+      3. Dev-mode console mock (non-production only)
+
+    Returns (success: bool, status_message: str).
+    OTP value is never logged.
+    """
+    subject = "AI Interview Assistant - Your Verification OTP"
+    body = (
+        f"Hello,\n\n"
+        f"Your verification OTP code for AI Interview Assistant is: {otp}\n\n"
+        f"This code will expire in {OTP_EXPIRE_MINUTES} minutes. "
+        f"If you did not request this, please ignore this email.\n\n"
+        f"Best regards,\nAI Interview Assistant Team"
+    )
+
+    # --- Primary: Resend API ---
+    if _resend_configured():
+        return _send_via_resend(to_email=to_email, subject=subject, text_body=body)
+
+    # --- Fallback: SMTP ---
+    if SMTP_USERNAME and SMTP_PASSWORD:
+        msg = EmailMessage()
+        msg.set_content(body)
+        msg["Subject"] = subject
+        msg["From"] = SENDER_EMAIL
+        msg["To"] = to_email
+        success, status = _send_via_smtp(msg)
+        if success:
+            return True, "Verification email sent successfully."
+        if APP_ENV == "development":
+            print(
+                f"\n{'='*50}\n[DEV MOCK EMAIL SENT FALLBACK]\n"
+                f"To: {to_email}\nSubject: {subject}\n"
+                f"[OTP hidden — check DB or console]\n{'='*50}\n"
+            )
+            return True, f"SMTP delivery failed; fell back to development mock output."
+        return False, status
+
+    # --- Dev-mode mock (no credentials configured) ---
+    if APP_ENV == "production":
+        logger.error(
+            "No email delivery backend configured in production. "
+            "Set RESEND_API_KEY + RESEND_FROM_EMAIL (or SMTP_USERNAME + SMTP_PASSWORD)."
+        )
+        return False, "Email delivery is not configured on the server."
+
+    # Development / test: print mock (OTP shown only in non-prod console)
+    print(
+        f"\n{'='*50}\n[DEV MOCK EMAIL SENT]\n"
+        f"To: {to_email}\nSubject: {subject}\nOTP: {otp}\n{'='*50}\n"
+    )
+    return True, "Dev mock email sent (no delivery backend configured)."
+
+
+def send_support_ticket_email(ticket_data: dict) -> Tuple[bool, str]:
+    """
+    Send support complaint notification email to the support inbox.
+    Sets the user's email as Reply-To so the support team can reply directly.
+
+    Delivery priority: Resend → SMTP → error.
+    Returns (success: bool, status_message: str).
+    """
+    support_target_email = SUPPORT_RECEIVER_EMAIL or "ainterviewassistant@gmail.com"
+    ticket_id   = ticket_data.get("ticket_id", "UNKNOWN")
+    user_name   = ticket_data.get("name", "Unknown User")
+    user_email  = ticket_data.get("email", "Unknown Email")
+    category    = ticket_data.get("category", "General")
+    subject_txt = ticket_data.get("subject", "No Subject")
+    description = ticket_data.get("description", "")
+    created_at  = ticket_data.get("created_at", datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC"))
+
+    email_subject = f"New Support Complaint \u2013 {ticket_id}"
+    body = (
+        f"AI Interview Assistant \u2014 Support Complaint Report\n"
+        f"{'='*60}\n"
+        f"Ticket ID:              {ticket_id}\n"
+        f"Submission Date/Time:   {created_at}\n"
+        f"User Full Name:         {user_name}\n"
+        f"User Account Email:     {user_email}\n"
+        f"Issue Category:         {category}\n"
+        f"Subject:                {subject_txt}\n"
+        f"{'='*60}\n\n"
+        f"Detailed Description of Problem:\n"
+        f"{description}\n\n"
+        f"{'='*60}\n"
+        f"Reply-To: {user_email}\n"
+        f"(Direct replies to this email will be delivered to {user_email})\n"
+    )
+    reply_to = user_email if user_email and "@" in user_email else None
+
+    # --- Primary: Resend API ---
+    if _resend_configured():
+        success, msg = _send_via_resend(
+            to_email=support_target_email,
+            subject=email_subject,
+            text_body=body,
+            reply_to=reply_to,
+        )
+        if success:
+            logger.info(
+                "Support complaint email [%s] delivered to %s via Resend (Reply-To=%s).",
+                ticket_id, support_target_email, reply_to,
+            )
+            return True, f"Support notification email delivered to {support_target_email}."
+        return False, "Your complaint has been recorded. Email notification is temporarily pending."
+
+    # --- Fallback: SMTP ---
+    if SMTP_USERNAME and SMTP_PASSWORD:
+        msg_obj = EmailMessage()
+        msg_obj.set_content(body)
+        msg_obj["Subject"] = email_subject
+        msg_obj["From"] = SENDER_EMAIL or SMTP_USERNAME or "ainterviewassistant@gmail.com"
+        msg_obj["To"] = support_target_email
+        if reply_to:
+            msg_obj["Reply-To"] = reply_to
+        success, smtp_msg = _send_via_smtp(msg_obj)
+        if success:
+            logger.info(
+                "Support complaint email [%s] delivered to %s via SMTP (Reply-To=%s).",
+                ticket_id, support_target_email, reply_to,
+            )
+            return True, f"Support notification email delivered to {support_target_email}."
+        return False, "Your complaint has been recorded. Email notification is temporarily pending."
+
+    # --- No backend configured ---
+    logger.warning(
+        "No email delivery backend configured. Support ticket %s logged to DB, "
+        "but email to %s was skipped.",
+        ticket_id, support_target_email,
+    )
+    return False, (
+        "No email delivery backend is configured on the server. "
+        "Ticket saved in database, but email notification was not sent."
+    )
 
 
 def send_resume_pdf_email(
@@ -244,74 +407,105 @@ def send_resume_pdf_email(
 ) -> Tuple[bool, str]:
     """
     Email generated resume PDF as attachment to the authenticated user's account email.
+
+    Delivery priority: Resend → SMTP → dev-mode mock.
+    Returns (success: bool, status_message: str).
     """
     if not to_email:
         return False, "Recipient email address is required."
 
-    msg = EmailMessage()
-    msg.set_content(
+    email_subject = f"Your Generated Resume \u2014 {filename}"
+    body = (
         f"Hello {candidate_name or 'Candidate'},\n\n"
-        f"Your professional resume ({template_name} template) generated with AI Interview Assistant Resume Builder is attached to this email.\n\n"
+        f"Your professional resume ({template_name} template) generated with "
+        f"AI Interview Assistant Resume Builder is attached to this email.\n\n"
         f"Filename: {filename}\n"
         f"Generated on: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}\n\n"
         f"Best regards,\nAI Interview Assistant Team"
     )
-    msg["Subject"] = f"Your Generated Resume — {filename}"
-    msg["From"] = SENDER_EMAIL
-    msg["To"] = to_email
 
-    msg.add_attachment(
-        pdf_bytes,
-        maintype="application",
-        subtype="pdf",
-        filename=filename
-    )
-
-    if not SMTP_USERNAME or not SMTP_PASSWORD:
-        if APP_ENV == "production":
-            return False, "SMTP credentials are not configured on the server."
-        print(f"\n{'='*55}\n[DEV RESUME PDF EMAIL MOCK]\nTo: {to_email}\nSubject: {msg['Subject']}\nAttachment: {filename} ({len(pdf_bytes)} bytes)\n{'='*55}\n")
-        return True, "Dev mock email logged (SMTP unconfigured)."
-
-    try:
-        server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT, timeout=12.0)
-        server.ehlo()
-        server.starttls()
-        server.ehlo()
-        server.login(SMTP_USERNAME, SMTP_PASSWORD)
-        server.send_message(msg)
-        server.quit()
-        logger.info(f"Resume PDF email successfully delivered to {to_email}.")
-        return True, "Resume email sent successfully."
-    except Exception as e:
-        logger.error(f"Failed to email resume PDF to {to_email}: {e}")
+    # --- Primary: Resend API (with PDF attachment) ---
+    if _resend_configured():
+        # Resend expects attachment content as a list of integers (byte values)
+        pdf_int_list = list(pdf_bytes)
+        attachment = {
+            "content": pdf_int_list,
+            "filename": filename,
+            "content_type": "application/pdf",
+        }
+        success, status = _send_via_resend(
+            to_email=to_email,
+            subject=email_subject,
+            text_body=body,
+            attachments=[attachment],
+        )
+        if success:
+            logger.info("Resume PDF email delivered to %s via Resend (file=%s).", to_email, filename)
+            return True, "Resume email sent successfully."
         if APP_ENV == "development":
-            print(f"\n{'='*55}\n[DEV RESUME PDF EMAIL FALLBACK]\nTo: {to_email}\nAttachment: {filename}\n{'='*55}\n")
-            return True, f"Mock resume delivery recorded: {e}"
-        return False, f"Failed to send email: {e}"
+            print(
+                f"\n{'='*55}\n[DEV RESUME PDF EMAIL FALLBACK — Resend error]\n"
+                f"To: {to_email}\nAttachment: {filename} ({len(pdf_bytes)} bytes)\n{'='*55}\n"
+            )
+            return True, f"Resend error; dev mock recorded: {status}"
+        return False, status
+
+    # --- Fallback: SMTP (with PDF attachment) ---
+    if SMTP_USERNAME and SMTP_PASSWORD:
+        msg = EmailMessage()
+        msg.set_content(body)
+        msg["Subject"] = email_subject
+        msg["From"] = SENDER_EMAIL
+        msg["To"] = to_email
+        msg.add_attachment(pdf_bytes, maintype="application", subtype="pdf", filename=filename)
+        success, smtp_status = _send_via_smtp(msg)
+        if success:
+            logger.info("Resume PDF email delivered to %s via SMTP (file=%s).", to_email, filename)
+            return True, "Resume email sent successfully."
+        if APP_ENV == "development":
+            print(
+                f"\n{'='*55}\n[DEV RESUME PDF EMAIL FALLBACK — SMTP error]\n"
+                f"To: {to_email}\nAttachment: {filename}\n{'='*55}\n"
+            )
+            return True, f"SMTP error; dev mock recorded: {smtp_status}"
+        return False, f"Failed to send email: {smtp_status}"
+
+    # --- Dev-mode mock (no credentials configured) ---
+    if APP_ENV == "production":
+        return False, "Email delivery is not configured on the server."
+    print(
+        f"\n{'='*55}\n[DEV RESUME PDF EMAIL MOCK]\n"
+        f"To: {to_email}\nSubject: {email_subject}\n"
+        f"Attachment: {filename} ({len(pdf_bytes)} bytes)\n{'='*55}\n"
+    )
+    return True, "Dev mock email logged (no delivery backend configured)."
 
 
-def send_malpractice_rejection_email(session_data: dict) -> tuple[bool, str]:
+def send_malpractice_rejection_email(session_data: dict) -> Tuple[bool, str]:
     """
-    Sends an automated notification to the candidate when a Mock Interview session
+    Send an automated notification to the candidate when a Mock Interview session
     is terminated due to an integrity/malpractice violation.
     Neutral, factual, professional tone without unsupported accusations.
+
+    Delivery priority: Resend → SMTP → dev-mode mock.
+    Returns (success: bool, status_message: str).
     """
-    candidate_name = session_data.get("name", "Candidate")
-    candidate_email = session_data.get("email", "").strip()
-    session_id = session_data.get("session_id", "N/A")
-    reason = session_data.get("reason", "Interview integrity requirements were not satisfied.")
+    candidate_name   = session_data.get("name", "Candidate")
+    candidate_email  = session_data.get("email", "").strip()
+    session_id       = session_data.get("session_id", "N/A")
+    reason           = session_data.get("reason", "Interview integrity requirements were not satisfied.")
     questions_completed = session_data.get("questions_completed", 0)
-    total_questions = session_data.get("total_questions", 30)
-    timestamp = session_data.get("timestamp", datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC"))
+    total_questions  = session_data.get("total_questions", 30)
+    timestamp        = session_data.get("timestamp", datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC"))
 
     if not candidate_email:
         return False, "Candidate email is missing."
 
-    msg = EmailMessage()
-    msg.set_content(
+    email_subject = "Mock Interview Rejected \u2014 Interview Integrity Violation"
+    body = (
         f"Dear {candidate_name},\n\n"
-        f"Your mock interview session (ID: {session_id}) has been terminated because the interview integrity requirements were not satisfied.\n\n"
+        f"Your mock interview session (ID: {session_id}) has been terminated "
+        f"because the interview integrity requirements were not satisfied.\n\n"
         f"{'='*55}\n"
         f"SESSION DETAILS\n"
         f"{'='*55}\n"
@@ -323,37 +517,63 @@ def send_malpractice_rejection_email(session_data: dict) -> tuple[bool, str]:
         f"Questions Completed:  {questions_completed} / {total_questions}\n"
         f"Reason for Rejection: {reason}\n"
         f"{'='*55}\n\n"
-        f"In accordance with our interview integrity policy, mock interview sessions require continuous, unhindered single-candidate face presence in the camera frame.\n\n"
+        f"In accordance with our interview integrity policy, mock interview sessions "
+        f"require continuous, unhindered single-candidate face presence in the camera frame.\n\n"
         f"You may start a new mock interview session when you are ready from your dashboard.\n\n"
         f"Sincerely,\n"
         f"AI Interview Assistant Evaluation System"
     )
-    msg["Subject"] = "Mock Interview Rejected — Interview Integrity Violation"
-    msg["From"] = SENDER_EMAIL
-    msg["To"] = candidate_email
 
-    if not SMTP_USERNAME or not SMTP_PASSWORD:
-        if APP_ENV == "production":
-            logger.error("SMTP credentials unconfigured in production. Cannot send rejection email.")
-            return False, "SMTP credentials unconfigured."
-        print(f"\n{'='*55}\n[DEV INTEGRITY REJECTION EMAIL MOCK]\nTo: {candidate_email}\nSubject: {msg['Subject']}\nSession: {session_id}\nReason: {reason}\n{'='*55}\n")
-        return True, "Dev mock rejection email logged."
-
-    try:
-        server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT, timeout=10.0)
-        server.ehlo()
-        server.starttls()
-        server.ehlo()
-        server.login(SMTP_USERNAME, SMTP_PASSWORD)
-        server.send_message(msg)
-        server.quit()
-        logger.info(f"Integrity rejection email for session [{session_id}] sent to {candidate_email}.")
-        return True, "Rejection email delivered successfully."
-    except Exception as e:
-        logger.error(f"Failed to deliver integrity rejection email: {type(e).__name__}: {e}")
+    # --- Primary: Resend API ---
+    if _resend_configured():
+        success, status = _send_via_resend(
+            to_email=candidate_email,
+            subject=email_subject,
+            text_body=body,
+        )
+        if success:
+            logger.info(
+                "Integrity rejection email for session [%s] delivered to %s via Resend.",
+                session_id, candidate_email,
+            )
+            return True, "Rejection email delivered successfully."
         if APP_ENV == "development":
-            print(f"\n{'='*55}\n[DEV INTEGRITY EMAIL FALLBACK]\nTo: {candidate_email}\nSubject: {msg['Subject']}\nSession: {session_id}\nReason: {reason}\n{'='*55}\n")
+            print(
+                f"\n{'='*55}\n[DEV INTEGRITY REJECTION EMAIL FALLBACK — Resend error]\n"
+                f"To: {candidate_email}\nSession: {session_id}\n{'='*55}\n"
+            )
+            return True, f"Resend error; dev fallback logged: {status}"
+        return False, f"Failed to deliver rejection email: {status}"
+
+    # --- Fallback: SMTP ---
+    if SMTP_USERNAME and SMTP_PASSWORD:
+        msg = EmailMessage()
+        msg.set_content(body)
+        msg["Subject"] = email_subject
+        msg["From"] = SENDER_EMAIL
+        msg["To"] = candidate_email
+        success, smtp_status = _send_via_smtp(msg)
+        if success:
+            logger.info(
+                "Integrity rejection email for session [%s] delivered to %s via SMTP.",
+                session_id, candidate_email,
+            )
+            return True, "Rejection email delivered successfully."
+        if APP_ENV == "development":
+            print(
+                f"\n{'='*55}\n[DEV INTEGRITY EMAIL FALLBACK — SMTP error]\n"
+                f"To: {candidate_email}\nSession: {session_id}\n{'='*55}\n"
+            )
             return True, "SMTP failed; dev fallback logged."
-        return False, f"Failed to deliver rejection email: {type(e).__name__}"
+        return False, f"Failed to deliver rejection email: {smtp_status}"
 
-
+    # --- Dev-mode mock (no credentials configured) ---
+    if APP_ENV == "production":
+        logger.error("No email delivery backend configured in production. Cannot send rejection email.")
+        return False, "Email delivery is not configured on the server."
+    print(
+        f"\n{'='*55}\n[DEV INTEGRITY REJECTION EMAIL MOCK]\n"
+        f"To: {candidate_email}\nSubject: {email_subject}\n"
+        f"Session: {session_id}\nReason: {reason}\n{'='*55}\n"
+    )
+    return True, "Dev mock rejection email logged."
