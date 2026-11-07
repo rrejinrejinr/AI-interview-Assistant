@@ -130,14 +130,15 @@ def run_auto_migrations():
             conn.commit()
 
     # 6. Check built_resumes table schema (non-destructive)
-if "built_resumes" in inspector.get_table_names():
-    b_columns = [c["name"] for c in inspector.get_columns("built_resumes")]
-    if "template_name" in b_columns or "data_json" in b_columns:
-        import logging
-        logging.getLogger(__name__).warning(
-            "Legacy built_resumes schema detected. "
-            "Skipping destructive migration to preserve existing records."
-        )
+    # 6. Check built_resumes table schema (non-destructive)
+    if "built_resumes" in inspector.get_table_names():
+        b_columns = [c["name"] for c in inspector.get_columns("built_resumes")]
+        if "template_name" in b_columns or "data_json" in b_columns:
+            import logging
+            logging.getLogger(__name__).warning(
+                "Legacy built_resumes schema detected. "
+                "Skipping destructive migration to preserve existing records."
+            )
 
     # 7. Create any newly registered tables
     Base.metadata.create_all(bind=engine)
