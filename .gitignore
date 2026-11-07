@@ -1,43 +1,63 @@
-# Node / Frontend
-node_modules/
-dist/
+# Environment Variables
 .env
-.env.*
-npm-debug.log*
+.env.local
+.env.*.local
+*.env
 
-# Java / Backend (Maven)
-target/
-*.class
-.idea/
-*.iml
-.classpath
-.project
-.settings/
-.mvn/wrapper/maven-wrapper.jar
-
-# Python / ML Service
+# Python & Virtual Environments
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
 venv/
+ENV/
 .venv/
-.pytest_cache/
-.coverage
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
 
-# Security & Credentials
-*.key
-*.pem
-*credentials*.json
-*service-account*.json
-*key*.json
-*secret*.json
-.env*
-config.json
-session.json
-credentials.json
-client_secret.json
+# Databases & Local Uploads
+*.db
+*.sqlite
+*.sqlite3
+backend/app.db
+backend/*.db
+scratch/
+reports/
 
-# OS files
+# Node & Frontend
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/build/
+.npm
+.eslintcache
+
+# Logs & OS Files
+_backup_pre_cleanup/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 .DS_Store
 Thumbs.db
+.idea/
+.vscode/
+
+# Generated resume files
+backend/uploads/built_resumes/*
+!backend/uploads/built_resumes/.gitkeep

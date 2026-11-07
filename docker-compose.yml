@@ -1,47 +1,46 @@
 version: '3.8'
 
 services:
-  ml-service:
-    build:
-      context: ./ml-service
-      dockerfile: Dockerfile
-    container_name: ml-service
-    ports:
-      - "8001:8001"
+  postgres:
+    image: postgres:16-alpine
+    container_name: ai_interview_db
+    restart: unless-stopped
     environment:
-      - PYTHONUNBUFFERED=1
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres_secure_password}
+      POSTGRES_DB: ${POSTGRES_DB:-interview_db}
+    ports:
+      - "5432:5432"
     volumes:
-      - ./ml-service:/app
+      - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 10s
       timeout: 5s
-      retries: 3
+      retries: 5
 
   backend:
     build:
-      context: ./backend
+      context: .
       dockerfile: Dockerfile
-    container_name: backend-service
-    ports:
-      - "8080:8080"
+    container_name: ai_interview_backend
+    restart: unless-stopped
     environment:
-      - ML_SERVICE_URL=http://ml-service:8001
-    depends_on:
-      ml-service:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/api/resume/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    container_name: frontend-service
+      APP_ENV: production
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres_secure_password}@postgres:5432/${POSTGRES_DB:-interview_db}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-default_secret_change_in_production}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://localhost:3000}
+      LLM_PROVIDER: ${LLM_PROVIDER:-openai}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-gpt-4o-mini}
+      SMTP_SERVER: ${SMTP_SERVER:-}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
     ports:
-      - "5173:80"
+      - "8001:8001"
     depends_on:
-      - backend
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres_data:

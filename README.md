@@ -1,78 +1,87 @@
-# AI Interview Assistant  [https://ai-interview-assistant-p3ii-fhzwbsedx-rejin.vercel.app/]
+# 🤖 AI Interview Assistant
 
-A full-stack application that analyzes resumes against job descriptions, extracts candidate details and skills using spaCy NLP, calculates ATS match scores via TF-IDF cosine similarity, and provides a mock interview question bank and interactive AI Coach (Claude Sonnet).
-
-## Project Structure
-
-- `ml-service/` — Python FastAPI microservice (port 8001) for text parsing and skill matching.
-- `backend/` — Spring Boot 3.2 Java application (port 8080) for database persistence and client orchestration.
-- `frontend/` — React + Vite web dashboard (port 5173) featuring dark mode aesthetics.
+An end-to-end, privacy-preserving AI assistant for resume screening, ATS optimization, face-monitored technical mock interviews, and personalized career roadmaps.
 
 ---
 
-## Running the Application
+## 🌟 Key Features
 
-There are two ways to run the complete stack: using Docker Compose (Recommended) or running each service locally.
+1. **📄 Intelligent Resume Parsing & Skill Extraction**:
+   - Parses PDF and DOCX files.
+   - Extracts candidate contact information, years of experience, and categorized skills across 7 technical categories.
 
-### Method 1: Using Docker Compose (Single Command)
+2. **🎯 Calibrated Role Prediction**:
+   - Predicts job category across 25 roles using a calibrated machine learning pipeline (`TF-IDF + LogisticRegression + Sigmoid Calibration`).
+   - Delivers reliable confidence levels (`High`, `Medium`, `Low`) and top-3 probability distributions.
 
-To build and run all 3 services together inside Docker containers, execute the following command in the root directory:
+3. **📊 Explainable ATS Scoring**:
+   - Dual-engine ATS formula combining 50% semantic cosine similarity and 50% canonical skill overlap.
+   - Highlights matched vs missing keywords and skills without obscure black-box scoring.
 
-```bash
-docker-compose up --build
-```
+4. **🔒 Secure Authentication & Data Isolation**:
+   - Candidate registration with 6-digit numeric email OTP verification.
+   - Password security with `bcrypt` (12 rounds) and `HS256` signed JWT bearer tokens.
+   - Strict per-user data isolation across resumes, interviews, and recommendations.
 
-- **React Frontend**: `http://localhost:5173` (Served by Nginx in production, mapped from port 80 in container)
-- **Spring Boot Backend**: `http://localhost:8080`
-- **FastAPI ML Service**: `http://localhost:8001`
-- **H2 In-Memory DB Console**: `http://localhost:8080/h2-console` (JDBC URL: `jdbc:h2:mem:interviewdb`, Username: `sa`, Password: `[empty]`)
+5. **🎤 Personalized AI Mock Interview**:
+   - Generates interview questions tailored to the candidate's actual extracted resume skills and target role.
+   - Evaluates candidate answers in real time using dense vector embeddings (`SentenceTransformer all-MiniLM-L6-v2`) and keyword coverage metrics.
+   - Dynamic conversational follow-up questions powered by configurable LLM integration.
+
+6. **📷 Client-Side Camera & Face Presence Verification**:
+   - Validates candidate physical presence before and during mock interviews using MediaPipe Face Detection in WebAssembly.
+   - **Privacy Guarantee**: Zero video frames or photos are stored or sent to the backend. No biometric facial recognition or identity database matching.
+
+7. **🚀 AI Career Hub, Skill Gaps & RAG Knowledge Assistant**:
+   - Analyzes skill gaps and constructs structured milestone learning roadmaps.
+   - Actionable resume improvement suggestions for measurable impact metrics.
+   - Local RAG technical assistant querying curated technical documentation across Python, ML, Backend, Cloud/DevOps, SQL, and System Design.
 
 ---
 
-### Method 2: Running Locally
+## 🛠️ Technology Stack
 
-If running locally on your host machine, start each service in a separate terminal:
+- **Frontend**: React, Modern Component Architecture, MediaPipe Face Detection (WASM), Axios.
+- **Backend**: FastAPI (Python 3.11), Uvicorn, Pydantic, SQLAlchemy ORM.
+- **Database**: PostgreSQL (Production) / SQLite (Development).
+- **Machine Learning**: `scikit-learn`, `sentence-transformers`, `spaCy`, `numpy`, `pandas`.
+- **Authentication**: JWT (`python-jose`), `bcrypt`, SMTP Email Verification.
+- **AI & RAG**: Configurable LLM Service (`OpenAI`, `Gemini`, `OpenRouter`, `Mock`), Local Dense Vector Store (Cosine Similarity).
 
-#### 1. Python FastAPI ML Service
-Make sure you have Python 3.10+ installed.
+---
+
+## 🚀 Getting Started
+
+### 1. Prerequisites
+- Python 3.11+
+- Node.js 18+ (for frontend)
+- PostgreSQL (or local SQLite)
+
+### 2. Environment Setup
+Copy the environment template:
 ```bash
-cd ml-service
-pip install -r requirements.txt
-python -m spacy download en_core_web_sm
-uvicorn app:app --reload --port 8001
+cp .env.example .env
 ```
-- **Health Check**: `GET http://localhost:8001/health`
+Edit `.env` with your database and security settings.
 
-#### 2. Spring Boot Backend
-Make sure you have Java 17+ installed.
+### 3. Backend Setup
 ```bash
 cd backend
-# On Linux/macOS
-./mvnw spring-boot:run
-# On Windows PowerShell
-.\mvnw.cmd spring-boot:run
+pip install -r requirements.txt
+python -m uvicorn app_fastapi:app --host 0.0.0.0 --port 8001 --reload
 ```
-- **Health Check**: `GET http://localhost:8080/api/resume/health`
 
-#### 3. React Frontend
-Make sure you have Node.js (v18+) installed.
+### 4. Running Tests
+Run the comprehensive end-to-end regression and security test suite:
 ```bash
-cd frontend
-npm install
-npm run dev
+python run_phase9_final_tests.py
 ```
-- **URL**: `http://localhost:5173`
 
 ---
 
-## Features
-
-1. **Upload Resume**: Supports PDF uploads (parsed via `pdfplumber`) and compares them against optional job descriptions.
-2. **ATS Match Score**: Calculations are weighted 50/50 between:
-   - **Semantic Fit**: Cosine similarity of TF-IDF vectors using a vectorizer trained on the Kaggle Resume Dataset.
-   - **Skill Match Score**: Percent overlap of required skills.
-3. **Candidate Information Extraction**: Automatically extracts email, phone, and years of experience using regexes.
-4. **Skills Breakdown**: Categorizes candidate skills into Languages, Frameworks, Databases, Cloud & DevOps, ML/AI, and Tools.
-5. **Interview Question Prep**: Displays 3+ technical questions per detected skill from a curated question bank.
-6. **AI Coach (Claude)**: Chat interface that uses the candidate's detected skills as context. (Requires Anthropic API key, but includes a local simulator fallback if no key is entered).
-7. **History**: Stores details of the last 10 analyzed resumes in H2 database.
+## 📖 Documentation
+- [System Architecture (ARCHITECTURE.md)](ARCHITECTURE.md)
+- [API Reference (API_DOCUMENTATION.md)](API_DOCUMENTATION.md)
+- [Deployment Guide (DEPLOYMENT.md)](DEPLOYMENT.md)
+- [Security & Privacy (SECURITY.md)](SECURITY.md)
+- [Final Audit Report (FINAL_AUDIT_REPORT.md)](FINAL_AUDIT_REPORT.md)
