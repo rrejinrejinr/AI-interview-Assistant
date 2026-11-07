@@ -109,12 +109,14 @@ app = FastAPI(
 
 @app.on_event("startup")
 def log_startup_configuration():
-    smtp_info = get_smtp_status()
+    email_info = get_smtp_status()  # returns full delivery status (Resend + SMTP)
     logger.info(
-        f"FastAPI Startup - SMTP Configured: {smtp_info['smtp_configured']} "
-        f"(Server: {smtp_info['smtp_server']}:{smtp_info['smtp_port']}, "
-        f"Username Configured: {smtp_info['smtp_username_configured']}, "
-        f"Password Configured: {smtp_info['smtp_password_configured']})"
+        f"FastAPI Startup - Email Delivery Backend: {email_info.get('active_backend', 'unknown')} | "
+        f"Resend Configured: {email_info.get('resend_configured', False)} | "
+        f"SMTP Configured: {email_info.get('smtp_configured', False)} "
+        f"(Server: {email_info['smtp_server']}:{email_info['smtp_port']}, "
+        f"Username Configured: {email_info['smtp_username_configured']}, "
+        f"Password Configured: {email_info['smtp_password_configured']})"
     )
 
 # 
