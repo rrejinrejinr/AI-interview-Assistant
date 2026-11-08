@@ -285,6 +285,15 @@ The backend is deployed on Render using the repository's `Dockerfile`. Configure
 
 The Dockerfile starts Uvicorn with one worker and uses Render's assigned `PORT` when available. Check the Render service logs and the health endpoint after deployment.
 
+## Demo Login (Optional)
+
+Use this section to share a **dedicated demo account** with recruiters or reviewers, if you choose to provide one.
+
+- **Demo email:** `[ADD DEMO EMAIL HERE]`
+- **Demo password:** `[ADD DEMO PASSWORD HERE]`
+
+> Before publishing credentials, create a separate demo user with limited/non-sensitive sample data. Do not use your personal Gmail password, Resend account credentials, production administrator account, API keys, or any other private secret here. Anyone who can view this repository may be able to read these values.
+
 ## Email Delivery Note
 
 The application currently uses the Resend API as its primary email delivery path and retains SMTP as a fallback.
